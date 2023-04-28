@@ -3,10 +3,12 @@ const multer = require('multer');
 const fs = require('fs');
 const { Configuration, OpenAIApi } = require('openai');
 
+require('dotenv').config();
+
 const app = express();
 
 const configuration = new Configuration({
-  apiKey: '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',
+  apiKey: process.env.OPEN_AI_KEY,
 });
 const openai = new OpenAIApi(configuration);
 
