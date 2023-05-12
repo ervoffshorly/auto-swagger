@@ -1,85 +1,60 @@
 const express = require('express');
-const multer = require('multer');
 const fs = require('fs');
-const { Configuration, OpenAIApi } = require('openai');
-
-require('dotenv').config();
+const path = require('path');
 
 const app = express();
 
-const configuration = new Configuration({
-  apiKey: process.env.OPEN_AI_KEY,
-});
-const openai = new OpenAIApi(configuration);
-
-const upload = multer({ dest: 'uploads/' });
-
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-app.get('/', async (_req, res) => {
-  const test = await openai.createCompletion({
-    model: 'text-davinci-003',
-    prompt: 'What are good foods?',
-    temperature: 0,
-    max_tokens: 2000,
-  });
-  res.status(200).json({
-    message: test.data.choices[0].text,
-  });
-});
-
-app.post('/upload', upload.single('file'), async (req, res) => {
-  const filePath = req.file.path;
-
-  fs.readFile(filePath, 'utf-8', async (err, data) => {
-    if (err) {
-      console.log({ err });
-      res.status(500).json({ message: 'Error reading file' });
-    } else {
-      const docs = [];
-      const start = data.indexOf('#Start') + '#Start'.length;
-      const end = data.indexOf('#End');
-
-      const result = data.substring(start, end).trim();
-
-      const chunks = result.split(/\n\n+/);
-
-      for (let i = 0; i < chunks.length; i += 1) {
-        const prompt = `Convert the following into a very simple Swagger Documentation:\n${chunks[i]}`;
-        console.log(`Generating Swagger Docs for Chunk: ${i}`);
-
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const completion = await openai.createCompletion({
-            model: 'text-davinci-003',
-            prompt,
-            temperature: 0,
-            max_tokens: 2000,
-          });
-          const aiData = completion.data.choices[0].text;
-          if (docs.length > 0) {
-            const newPath = aiData.split('paths:');
-            docs.push(newPath[1]);
-          } else {
-            docs.push(aiData);
-          }
-          console.log(`Documentation: ${docs}`);
-        } catch (error) {
-          console.log({ error });
-          res.status(500).json(error);
-          return;
-        }
+function getApiRoutes(folderPath) {
+  let routes = [];
+  const files = fs.readdirSync(folderPath);
+  files.forEach((file) => {
+    const filePath = path.join(folderPath, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      routes.push(...getApiRoutes(filePath));
+    } else if (path.extname(filePath) === '.js') {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const regex = /router\.([a-z]+)\(['"`](.*?)['"`],\s?(.*?)\)/g;
+      let regMatch;
+      while ((regMatch = regex.exec(content))) {
+        const method = regMatch[1];
+        const endpoint = regMatch[2];
+        const functionName = regMatch[3];
+        routes = [...routes, { method, endpoint, functionName }];
       }
 
-      res.status(200).send(docs);
+      const contentRegex =
+        /(.*?)async\s+\(.*?\)\s*=>\s*\{((?:[^{}]|{(?:[^{}]|{(?:[^{}]|{[^{}]*})*})*})*})/g;
+      const functionBody = [...content.matchAll(contentRegex)].map(
+        (match) => match[0]
+      );
     }
   });
+  return routes;
+}
+
+app.get('/folder-framework', (req, res) => {
+  const folderPath = req.query.folderPath;
+  const files = fs.readdirSync(folderPath);
+  let framework;
+  files.forEach((file) => {
+    const filePath = path.join(folderPath, file);
+    if (fs.existsSync(filePath) && fs.lstatSync(filePath).isDirectory()) {
+      if (fs.existsSync(path.join(filePath, 'package.json'))) {
+        const pkg = require(path.join(filePath, 'package.json'));
+        if (
+          pkg.dependencies &&
+          (pkg.dependencies.express || pkg.dependencies['@types/express'])
+        ) {
+          framework = 'express';
+        }
+      }
+    }
+  });
+  const apiRoutes = getApiRoutes(folderPath);
+  res.json({ framework, apiRoutes });
 });
 
-const port = process.env.PORT || 8080;
-
-app.listen(port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Server is listening on port ${port}`);
+app.listen(3000, () => {
+  console.log('Server running on port 3000');
 });
